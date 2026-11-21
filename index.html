@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#101d35">
+  <title>NOVA Messenger</title>
+  <style>
+    *{box-sizing:border-box}body{margin:0;font-family:Inter,system-ui,Arial;background:#eef3f9;color:#17243a}
+    header{background:#101d35;color:white;padding:18px 24px;display:flex;align-items:center;gap:12px}
+    .logo{width:40px;height:40px;border-radius:13px;background:#2589ed;display:grid;place-items:center;font-size:22px}
+    header strong{font-size:22px;letter-spacing:1px}header small{display:block;color:#b8cce7}
+    main{max-width:980px;margin:32px auto;padding:0 16px;display:grid;grid-template-columns:300px 1fr;gap:18px}
+    .panel{background:white;border-radius:18px;padding:20px;box-shadow:0 8px 30px #1c365012;min-width:0}
+    h2{margin:0 0 16px;font-size:18px}input,button{font:inherit;border-radius:10px;padding:12px;border:1px solid #d7e0eb;width:100%;margin:5px 0}
+    button{background:#2589ed;color:white;border:0;font-weight:650;cursor:pointer}button.secondary{background:#e8f2ff;color:#1769b5}
+    .muted{color:#718096;font-size:13px}.status{padding:10px;background:#f1f6fc;border-radius:10px;margin:10px 0;font-size:13px}
+    #messages{height:350px;overflow:auto;background:#f5f8fc;border-radius:12px;padding:12px;margin:12px 0}
+    .msg{background:white;padding:9px 12px;border-radius:12px;margin:7px 0;max-width:85%;overflow-wrap:anywhere}
+    .msg.mine{background:#dceeff;margin-left:auto}.msg small{display:block;color:#718096;margin-bottom:3px}
+    .row{display:flex;gap:8px}.row input{flex:1}.row button{width:110px}
+    #chatArea{display:none}.item{padding:10px;border-bottom:1px solid #edf1f6;cursor:pointer;border-radius:8px}.item:hover{background:#f1f6fc}
+    @media(max-width:700px){main{grid-template-columns:1fr;margin:16px auto}#messages{height:45vh}}
+  </style>
+</head>
+<body>
+<header><div class="logo">✦</div><div><strong>NOVA</strong><small>CONNECT WITHOUT LIMITS</small></div></header>
+<main>
+  <section class="panel">
+    <h2>Account</h2>
+    <div id="auth">
+      <input id="email" type="email" placeholder="Email address">
+      <input id="password" type="password" placeholder="Password (12+ characters)">
+      <input id="username" placeholder="Username (for registration)">
+      <input id="displayName" placeholder="Display name">
+      <button id="register">Create account</button>
+      <button class="secondary" id="login">Sign in</button>
+    </div>
+    <div id="account" hidden>
+      <div class="status" id="who"></div>
+      <button class="secondary" id="logout">Sign out</button>
+    </div>
+    <hr style="border:0;border-top:1px solid #edf1f6;margin:20px 0">
+    <h2>Find people</h2>
+    <input id="search" placeholder="Search username or name">
+    <div id="users"></div>
+    <h2 style="margin-top:20px">Chats</h2>
+    <div id="conversations" class="muted">Sign in to load chats.</div>
+  </section>
+  <section class="panel">
+    <h2 id="chatTitle">Your NOVA conversations</h2>
+    <p class="muted" id="empty">Create an account, find another user and open a conversation to start chatting.</p>
+    <div id="chatArea">
+      <div id="messages"></div>
+      <div class="row"><input id="message" maxlength="5000" placeholder="Write a message…"><button id="send">Send</button></div>
+    </div>
+    <div class="status" id="notice">NOVA MVP · Real-time text messaging starter</div>
+  </section>
+</main>
+<script src="/socket.io/socket.io.js"></script>
+<script>
+let token = localStorage.getItem("nova_token") || "";
+let me = null, socket = null, currentConversation = null;
+const $ = id => document.getElementById(id);
+const api = async (url, options={}) => {
+  const res = await fetch(url, { ...options, headers: {
+    "Content-Type":"application/json",
+    ...(token ? {Authorization:"Bearer "+token} : {}),
+    ...(options.headers||{})
+  }});
+  const data = await res.json().catch(()=>({}));
+  if(!res.ok) throw new Error(data.error || "Request failed");
+  return data;
+};
+function notice(text){ $("notice").textContent=text; }
+function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
+function connect(){
+  if(socket) socket.disconnect();
+  socket = io({auth:{token}});
+  socket.on("connect_error",()=>notice("Live connection failed. Please sign in again."));
+  socket.on("message:new", m => {
+    if(Number(m.conversation_id)===Number(currentConversation)) addMessage(m);
+    loadConversations();
+  });
+}
+function addMessage(m){
+  const div=document.createElement("div");
+  div.className="msg"+(Number(m.sender_id)===Number(me.id)?" mine":"");
+  div.innerHTML="<small>"+escapeHtml(m.display_name||m.username||"User")+"</small>"+escapeHtml(m.body);
+  $("messages").appendChild(div); $("messages").scrollTop=$("messages").scrollHeight;
+}
+async function refresh(){
+  const data=await api("/api/me"); me=data.user;
+  $("auth").hidden=true; $("account").hidden=false;
+  $("who").textContent="Signed in as "+me.display_name+" (@"+me.username+")";
+  connect(); await loadConversations(); notice("Connected to NOVA.");
+}
+async function auth(mode){
+  try{
+    const payload={email:$("email").value,password:$("password").value};
+    if(mode==="register"){payload.username=$("username").value;payload.displayName=$("displayName").value;}
+    const data=await api("/api/auth/"+mode,{method:"POST",body:JSON.stringify(payload)});
+    token=data.token; localStorage.setItem("nova_token",token); await refresh();
+  }catch(e){notice(e.message);}
+}
+$("register").onclick=()=>auth("register");
+$("login").onclick=()=>auth("login");
+$("logout").onclick=()=>{localStorage.removeItem("nova_token");token="";me=null;if(socket)socket.disconnect();location.reload();};
+let searchTimer;
+$("search").addEventListener("input",()=>{
+  clearTimeout(searchTimer);
+  searchTimer=setTimeout(async()=>{
+    if(!token || $("search").value.trim().length<2){$("users").innerHTML="";return;}
+    try{
+      const d=await api("/api/users?q="+encodeURIComponent($("search").value));
+      $("users").innerHTML="";
+      d.users.forEach(u=>{
+        const el=document.createElement("div");el.className="item";
+        el.textContent=u.display_name+" (@"+u.username+")";
+        el.onclick=()=>openDirect(u.id,u.display_name);$("users").appendChild(el);
+      });
+    }catch(e){notice(e.message);}
+  },250);
+});
+async function openDirect(userId,name){
+  try{const d=await api("/api/conversations/direct",{method:"POST",body:JSON.stringify({userId})});await openConversation(d.conversationId,name);await loadConversations();}
+  catch(e){notice(e.message);}
+}
+async function loadConversations(){
+  const d=await api("/api/conversations");$("conversations").innerHTML="";
+  if(!d.conversations.length){$("conversations").textContent="No conversations yet.";return;}
+  d.conversations.forEach(c=>{
+    const el=document.createElement("div");el.className="item";
+    const participant=(c.participants||[])[0];
+    el.textContent=(c.title|| (participant?participant.displayName+" (@"+participant.username+")":"Conversation"))+(c.last_message?" · "+c.last_message.body.slice(0,28):"");
+    el.onclick=()=>openConversation(c.id, c.title || (participant&&participant.displayName) || "Conversation");
+    $("conversations").appendChild(el);
+  });
+}
+async function openConversation(id,title){
+  currentConversation=id;$("chatTitle").textContent=title;$("empty").style.display="none";$("chatArea").style.display="block";
+  $("messages").innerHTML="";
+  socket.emit("conversation:join",{conversationId:id});
+  const d=await api("/api/conversations/"+id+"/messages");
+  d.messages.forEach(addMessage);
+}
+$("send").onclick=sendMessage;
+$("message").addEventListener("keydown",e=>{if(e.key==="Enter")sendMessage();});
+function sendMessage(){
+  const body=$("message").value.trim();if(!body||!currentConversation)return;
+  socket.emit("message:send",{conversationId:currentConversation,body},result=>{
+    if(result&&result.error)notice(result.error);else $("message").value="";
+  });
+}
+if(token) refresh().catch(()=>{localStorage.removeItem("nova_token");token="";$("auth").hidden=false;});
+</script>
+</body>
+</html>
